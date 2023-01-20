@@ -2,6 +2,7 @@ package cron
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"sync"
 	"time"
@@ -385,6 +386,10 @@ func (c *Cron) AddJobCallback(spec string, cmd Job, callback func()) (EntryID, e
 	schedule, err := c.parser.Parse(spec)
 	if err != nil {
 		return 0, err
+	}
+	_, expired := schedule.Next(time.Now().In(c.location))
+	if expired {
+		return 0, errors.New("job will not execute")
 	}
 	return c.ScheduleCallback(schedule, cmd, callback), nil
 }

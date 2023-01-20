@@ -767,19 +767,18 @@ func TestRoutineJob(t *testing.T) {
 	content := strings.Join([]string{"0", "1", "", now.Add(2 * time.Second).Format("15:04:05"),
 		now.Add(-time.Second).Format("2006-01-02 15:04:05"),
 		now.Add(3 * time.Second).Format("2006-01-02 15:04:05")}, "|")
-	routineStr := "routine=" + content
 
 	var calls int64
-	cron.AddFuncCallback(routineStr,
+	cron.AddFuncCallback("routine="+content,
 		func() { wg.Done() },
 		func() { atomic.AddInt64(&calls, 1) },
 	)
 
-	content2 := strings.Join([]string{"0", "1", "", now.Add(2 * time.Second).Format("15:04:05"),
+	expiredTask := strings.Join([]string{"0", "1", "", now.Add(2 * time.Second).Format("15:04:05"),
 		now.Add(-time.Second).Format("2006-01-02 15:04:05"),
 		now.Add(time.Second).Format("2006-01-02 15:04:05")}, "|")
 	var calls2 int64
-	entryID, _ := cron.AddFuncCallback("routine="+content2,
+	_, ct2err := cron.AddFuncCallback("routine="+expiredTask,
 		func() {},
 		func() { atomic.AddInt64(&calls2, 1) },
 	)
@@ -790,19 +789,14 @@ func TestRoutineJob(t *testing.T) {
 	case <-time.After(2 * OneSecond):
 		t.Fatal("expected job runs")
 	case <-wait(wg):
-		if atomic.LoadInt64(&calls) != 0 {
-			t.Errorf("job1 called %d times, expected 0\n", calls)
+		if atomic.LoadInt64(&calls) != 1 {
+			t.Errorf("job1 called %d times, expected 1\n", calls)
 		}
-		if atomic.LoadInt64(&calls2) != 1 {
-			t.Errorf("job2 called %d times, expected 1\n", calls)
+		if atomic.LoadInt64(&calls2) != 0 {
+			t.Errorf("job2 called %d times, expected 0\n", calls2)
 		}
-		for _, entry := range cron.Entries() {
-			if entry.ID == entryID {
-				t.Error("expired entry not removed")
-			}
-		}
-		if len(cron.Entries()) != 1 {
-			t.Error("entries not removed")
+		if ct2err == nil || ct2err.Error() != "job will not execute" {
+			t.Errorf("job add func callback expired task not return error")
 		}
 	}
 }
