@@ -62,7 +62,7 @@ func TestActivation(t *testing.T) {
 			t.Error(err)
 			continue
 		}
-		actual := sched.Next(getTime(test.time).Add(-1 * time.Second))
+		actual, _ := sched.Next(getTime(test.time).Add(-1 * time.Second))
 		expected := getTime(test.time)
 		if test.expected && expected != actual || !test.expected && expected == actual {
 			t.Errorf("Fail evaluating %s on %s: (expected) %s != %s (actual)",
@@ -191,7 +191,7 @@ func TestNext(t *testing.T) {
 			t.Error(err)
 			continue
 		}
-		actual := sched.Next(getTime(c.time))
+		actual, _ := sched.Next(getTime(c.time))
 		expected := getTime(c.expected)
 		if !actual.Equal(expected) {
 			t.Errorf("%s, \"%s\": (expected) %v != %v (actual)", c.time, c.spec, expected, actual)
@@ -264,7 +264,7 @@ func TestNextWithTz(t *testing.T) {
 			t.Error(err)
 			continue
 		}
-		actual := sched.Next(getTimeTZ(c.time))
+		actual, _ := sched.Next(getTimeTZ(c.time))
 		expected := getTimeTZ(c.expected)
 		if !actual.Equal(expected) {
 			t.Errorf("%s, \"%s\": (expected) %v != %v (actual)", c.time, c.spec, expected, actual)

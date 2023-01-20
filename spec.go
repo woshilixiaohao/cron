@@ -55,7 +55,7 @@ const (
 
 // Next returns the next time this schedule is activated, greater than the given
 // time.  If no time can be found to satisfy the schedule, return the zero time.
-func (s *SpecSchedule) Next(t time.Time) time.Time {
+func (s *SpecSchedule) Next(t time.Time) (time.Time, bool) {
 	// General approach
 	//
 	// For Month, Day, Hour, Minute, Second:
@@ -89,7 +89,7 @@ func (s *SpecSchedule) Next(t time.Time) time.Time {
 
 WRAP:
 	if t.Year() > yearLimit {
-		return time.Time{}
+		return time.Time{}, false
 	}
 
 	// Find the first applicable month.
@@ -171,7 +171,7 @@ WRAP:
 		}
 	}
 
-	return t.In(origLocation)
+	return t.In(origLocation), false
 }
 
 // dayMatches returns true if the schedule's day-of-week and day-of-month

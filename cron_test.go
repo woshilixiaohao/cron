@@ -537,8 +537,8 @@ func TestScheduleAfterRemoval(t *testing.T) {
 
 type ZeroSchedule struct{}
 
-func (*ZeroSchedule) Next(time.Time) time.Time {
-	return time.Time{}
+func (*ZeroSchedule) Next(time.Time) (time.Time, bool) {
+	return time.Time{}, false
 }
 
 // Tests that job without time does not run
@@ -699,4 +699,110 @@ func stop(cron *Cron) chan bool {
 // newWithSeconds returns a Cron with the seconds field enabled.
 func newWithSeconds() *Cron {
 	return New(WithParser(secondParser), WithChain())
+}
+
+func newWithRoutineAndTimed() *Cron {
+	return New(WithParser(NewParser(Routine|Timed)), WithChain())
+}
+
+func TestTimedJob(t *testing.T) {
+	wg := &sync.WaitGroup{}
+	wg.Add(2)
+
+	cron := newWithRoutineAndTimed()
+
+	var calls int64
+	entryID, _ := cron.AddFuncCallback("timed="+time.Now().Add(time.Second).Format("2006-01-02 15:04:05"),
+		func() { wg.Done() },
+		func() {
+			atomic.AddInt64(&calls, 1)
+			wg.Done()
+		})
+	cron.AddFuncCallback("timed="+time.Now().Add(2*time.Second).Format("2006-01-02 15:04:05"),
+		func() {},
+		func() {},
+	)
+	// add error
+	errorId, err := cron.AddFuncCallback("timed="+time.Now().Add(2*time.Second).Format("2006-01-02 15-04-05"),
+		func() {},
+		func() {},
+	)
+	if errorId != 0 && err != nil {
+		t.Errorf("add error spec fail")
+	}
+	cron.Start()
+	// add running
+	cron.AddFuncCallback("timed="+time.Now().Add(2*time.Second).Format("2006-01-02 15:04:05"),
+		func() {},
+		func() {},
+	)
+	defer cron.Stop()
+
+	select {
+	case <-time.After(OneSecond):
+		t.Fatal("expected job runs")
+	case <-wait(wg):
+		if atomic.LoadInt64(&calls) != 1 {
+			t.Errorf("called %d times, expected 1\n", calls)
+		}
+		for _, entry := range cron.Entries() {
+			if entry.ID == entryID {
+				t.Error("expired entry not removed")
+			}
+		}
+		if len(cron.Entries()) != 2 {
+			t.Error("entries not removed")
+		}
+	}
+}
+
+func TestRoutineJob(t *testing.T) {
+	wg := &sync.WaitGroup{}
+	wg.Add(1)
+
+	cron := newWithRoutineAndTimed()
+
+	now := time.Now()
+
+	content := strings.Join([]string{"0", "1", "", now.Add(2 * time.Second).Format("15:04:05"),
+		now.Add(-time.Second).Format("2006-01-02 15:04:05"),
+		now.Add(3 * time.Second).Format("2006-01-02 15:04:05")}, "|")
+	routineStr := "routine=" + content
+
+	var calls int64
+	cron.AddFuncCallback(routineStr,
+		func() { wg.Done() },
+		func() { atomic.AddInt64(&calls, 1) },
+	)
+
+	content2 := strings.Join([]string{"0", "1", "", now.Add(2 * time.Second).Format("15:04:05"),
+		now.Add(-time.Second).Format("2006-01-02 15:04:05"),
+		now.Add(time.Second).Format("2006-01-02 15:04:05")}, "|")
+	var calls2 int64
+	entryID, _ := cron.AddFuncCallback("routine="+content2,
+		func() {},
+		func() { atomic.AddInt64(&calls2, 1) },
+	)
+	cron.Start()
+	defer cron.Stop()
+
+	select {
+	case <-time.After(2 * OneSecond):
+		t.Fatal("expected job runs")
+	case <-wait(wg):
+		if atomic.LoadInt64(&calls) != 0 {
+			t.Errorf("job1 called %d times, expected 0\n", calls)
+		}
+		if atomic.LoadInt64(&calls2) != 1 {
+			t.Errorf("job2 called %d times, expected 1\n", calls)
+		}
+		for _, entry := range cron.Entries() {
+			if entry.ID == entryID {
+				t.Error("expired entry not removed")
+			}
+		}
+		if len(cron.Entries()) != 1 {
+			t.Error("entries not removed")
+		}
+	}
 }

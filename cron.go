@@ -40,7 +40,8 @@ type Job interface {
 type Schedule interface {
 	// Next returns the next activation time, later than the given time.
 	// Next is invoked initially, and then each time the job is run.
-	Next(time.Time) time.Time
+	// 获取下次执行时间时判断是否超出预设时间
+	Next(time.Time) (time.Time, bool)
 }
 
 // EntryID identifies an entry within a Cron instance
@@ -69,6 +70,10 @@ type Entry struct {
 	// It is kept around so that user code that needs to get at the job later,
 	// e.g. via Entries() can do so.
 	Job Job
+
+	CallBack func()
+
+	Expired bool
 }
 
 // Valid returns true if this is not the zero entry.
@@ -242,8 +247,8 @@ func (c *Cron) run() {
 	// Figure out the next activation times for each entry.
 	now := c.now()
 	for _, entry := range c.entries {
-		entry.Next = entry.Schedule.Next(now)
-		c.logger.Info("schedule", "now", now, "entry", entry.ID, "next", entry.Next)
+		entry.Next, entry.Expired = entry.Schedule.Next(now)
+		c.logger.Info("schedule", "now", now, "entry", entry.ID, "next", entry.Next, "expired", entry.Expired)
 	}
 
 	for {
@@ -270,16 +275,21 @@ func (c *Cron) run() {
 					if e.Next.After(now) || e.Next.IsZero() {
 						break
 					}
-					c.startJob(e.WrappedJob)
 					e.Prev = e.Next
-					e.Next = e.Schedule.Next(now)
-					c.logger.Info("run", "now", now, "entry", e.ID, "next", e.Next)
+					e.Next, e.Expired = e.Schedule.Next(now)
+					c.logger.Info("run", "now", now, "entry", e.ID, "next", e.Next, "expired", e.Expired)
+					if e.Expired {
+						c.startJobWithCallback(e.WrappedJob, e.CallBack)
+						c.removeEntry(e.ID)
+					} else {
+						c.startJob(e.WrappedJob)
+					}
 				}
 
 			case newEntry := <-c.add:
 				timer.Stop()
 				now = c.now()
-				newEntry.Next = newEntry.Schedule.Next(now)
+				newEntry.Next, newEntry.Expired = newEntry.Schedule.Next(now)
 				c.entries = append(c.entries, newEntry)
 				c.logger.Info("added", "now", now, "entry", newEntry.ID, "next", newEntry.Next)
 
@@ -310,6 +320,17 @@ func (c *Cron) startJob(j Job) {
 	go func() {
 		defer c.jobWaiter.Done()
 		j.Run()
+	}()
+}
+
+func (c *Cron) startJobWithCallback(j Job, callback func()) {
+	c.jobWaiter.Add(1)
+	go func() {
+		defer c.jobWaiter.Done()
+		j.Run()
+		if callback != nil {
+			callback()
+		}
 	}()
 }
 
@@ -352,4 +373,39 @@ func (c *Cron) removeEntry(id EntryID) {
 		}
 	}
 	c.entries = entries
+}
+
+// AddFuncCallback 添加带回调函数的任务
+func (c *Cron) AddFuncCallback(spec string, cmd, callback func()) (EntryID, error) {
+	return c.AddJobCallback(spec, FuncJob(cmd), callback)
+}
+
+// AddJobCallback 添加带回调函数的任务
+func (c *Cron) AddJobCallback(spec string, cmd Job, callback func()) (EntryID, error) {
+	schedule, err := c.parser.Parse(spec)
+	if err != nil {
+		return 0, err
+	}
+	return c.ScheduleCallback(schedule, cmd, callback), nil
+}
+
+// ScheduleCallback adds a Job to the Cron to be run on the given schedule.
+// The job is wrapped with the configured Chain.
+func (c *Cron) ScheduleCallback(schedule Schedule, cmd Job, callback func()) EntryID {
+	c.runningMu.Lock()
+	defer c.runningMu.Unlock()
+	c.nextID++
+	entry := &Entry{
+		ID:         c.nextID,
+		Schedule:   schedule,
+		WrappedJob: c.chain.Then(cmd),
+		Job:        cmd,
+		CallBack:   callback,
+	}
+	if !c.running {
+		c.entries = append(c.entries, entry)
+	} else {
+		c.add <- entry
+	}
+	return entry.ID
 }

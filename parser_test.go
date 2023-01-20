@@ -381,3 +381,42 @@ func annual(loc *time.Location) *SpecSchedule {
 		Location: loc,
 	}
 }
+
+func TestParseRoutineErrors(t *testing.T) {
+	var tests = []struct{ expr, err string }{
+		{"routine=2|1|5|10:40:10|2022-02-02 10:30:00|2023-03-01 09:00:00|", "routine string fields number should be 6, now is 7"},
+		{"routine=1|1|7|10:40:10|2022-02-02 10:30:00|2023-03-01 09:00:00", "uint value (7) above maximum (6)"},
+		{"routine=1|0|1|10:40:10|2022-02-02 10:30:00|2023-03-01 09:00:00", "uint value (0) below minimum (1)"},
+		{"routine=1|-1|1|10:40:10|2022-02-02 10:30:00|2023-03-01 09:00:00", "negative number (-1) not allowed: -1"},
+		{"routine=-1|1|1|10:40:10|2022-02-02 10:30:00|2023-03-01 09:00:00", "negative number (-1) not allowed: -1"},
+		{"routine=2|1|5|10:40:10|2022-02-02 10:30:00|2022-02-01 09:00:00", "startTime: 2022-02-02 10:30:00 is after endTime: 2022-02-01 09:00:00"},
+		{"routine=2|1|5|10:40:10|2022-02-30 10:30:00|2022-02-01 09:00:00", "day out of range"},
+		{"routine=2|1|5|10:40:10|2022-02-30 10-30-03|2022-02-01 09:00:00", "cannot parse"},
+		{"timed=2022-02-02 10-30-00", "parser does not accept timed"},
+	}
+	for _, c := range tests {
+		actual, err := NewParser(Routine).Parse(c.expr)
+		if err == nil || !strings.Contains(err.Error(), c.err) {
+			t.Errorf("%s => expected %v, got %v", c.expr, c.err, err)
+		}
+		if actual != nil {
+			t.Errorf("expected nil routine on error, got %v", actual)
+		}
+	}
+}
+
+func TestParseTimedErrors(t *testing.T) {
+	var tests = []struct{ expr, err string }{
+		{"timed=2022-02-02 10-30-00", "time format should be yyyy-MM-dd HH:mm:ss"},
+		{"routine=2022-02-02 10-30-00", "parser does not accept routine"},
+	}
+	for _, c := range tests {
+		actual, err := NewParser(Timed).Parse(c.expr)
+		if err == nil || !strings.Contains(err.Error(), c.err) {
+			t.Errorf("%s => expected %v, got %v", c.expr, c.err, err)
+		}
+		if actual != nil {
+			t.Errorf("expected nil timed on error, got %v", actual)
+		}
+	}
+}

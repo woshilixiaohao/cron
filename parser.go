@@ -24,6 +24,8 @@ const (
 	Dow                                    // Day of week field, default *
 	DowOptional                            // Optional day of week field, default *
 	Descriptor                             // Allow descriptors such as @monthly, @weekly, etc.
+	Timed                                  // Allow descriptor such as timed=2020-10-10 10:10:10
+	Routine                                // Allow descriptor such as routine={type}|{interval}|{spec}|{time}|{startTime}|{endTime}
 )
 
 var places = []ParseOption{
@@ -43,6 +45,25 @@ var defaults = []string{
 	"*",
 	"*",
 }
+
+var (
+	TimedPrefix   = "timed="
+	RoutinePrefix = "routine="
+)
+
+type RoutineType int
+
+const (
+	RoutineDay RoutineType = iota
+	RoutineDow
+	RoutineDom
+)
+
+var (
+	routineTypeBound = bounds{min: 0, max: 2, names: nil}
+	intervalBound    = bounds{min: 1, max: 100, names: nil} // 间隔最多100，再大无意义
+	routineDom       = bounds{0, 31, nil}
+)
 
 // A custom Parser that can be configured.
 type Parser struct {
@@ -108,6 +129,20 @@ func (p Parser) Parse(spec string) (Schedule, error) {
 			return nil, fmt.Errorf("parser does not accept descriptors: %v", spec)
 		}
 		return parseDescriptor(spec, loc)
+	}
+
+	if strings.HasPrefix(spec, TimedPrefix) {
+		if p.options&Timed == 0 {
+			return nil, fmt.Errorf("parser does not accept timed: %v", spec)
+		}
+		return parseTimed(spec, loc)
+	}
+
+	if strings.HasPrefix(spec, RoutinePrefix) {
+		if p.options&Routine == 0 {
+			return nil, fmt.Errorf("parser does not accept routine: %v", spec)
+		}
+		return parseRoutine(spec, loc)
 	}
 
 	// Split on whitespace.
@@ -431,4 +466,101 @@ func parseDescriptor(descriptor string, loc *time.Location) (Schedule, error) {
 	}
 
 	return nil, fmt.Errorf("unrecognized descriptor: %s", descriptor)
+}
+
+// parseTimed 定时任务表达式解析，format：timed=yyyy-MM-dd HH:mm:ss ,return a timed schedule, or error if format failed
+func parseTimed(timed string, loc *time.Location) (Schedule, error) {
+	timed = strings.Replace(timed, TimedPrefix, "", 1)
+	t, err := time.ParseInLocation("2006-01-02 15:04:05", timed, loc)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse time %s, time format should be yyyy-MM-dd HH:mm:ss", err)
+	}
+	return &TimedSchedule{Timing: t}, nil
+}
+
+// parseRoutine 周期任务表达式解析,format: routine={type}|{interval}|{spec}|{time}|{startTime}|{endTime}
+// param解释：type: 间隔类型，枚举 RoutineDay, RoutineDow, RoutineDom
+// 			 interval: 间隔时间
+//           spec: RoutineDay: 不关注, RoutineDow: 0-6 SUN-SAT, RoutineDom: 0-31 0为每月最后一天
+//			 time: 执行时间 format: HH:mm:ss
+//           startTime: 开始时间 format: yyyy-MM-dd HH:mm:ss
+//           endTime: 结束时间 format: yyyy-MM-dd HH:mm:ss
+func parseRoutine(routine string, loc *time.Location) (Schedule, error) {
+	routine = strings.Replace(routine, RoutinePrefix, "", 1)
+	fields := strings.Split(routine, "|")
+	if len(fields) != 6 {
+		return nil, fmt.Errorf("routine string fields number should be 6, now is %d", len(fields))
+	}
+
+	var err error
+
+	field := func(field string, r bounds) int {
+		if err != nil {
+			return 0
+		}
+		var intValue int
+		intValue, err = getIntRange(field, r)
+		return intValue
+	}
+	specFunc := func(field string, routineType RoutineType) int {
+		if err != nil {
+			return 0
+		}
+		var intValue int
+		if routineType == RoutineDow {
+			intValue, err = getIntRange(field, dow)
+		} else if routineType == RoutineDom {
+			intValue, err = getIntRange(field, routineDom)
+		}
+		return intValue
+	}
+	timeFormat := func(field, format string, loc *time.Location) time.Time {
+		if err != nil {
+			return time.Time{}
+		}
+		var formatTime time.Time
+		formatTime, err = time.ParseInLocation(format, field, loc)
+		return formatTime
+	}
+
+	var (
+		routineType = field(fields[0], routineTypeBound)
+		interval    = field(fields[1], intervalBound)
+		spec        = specFunc(fields[2], RoutineType(routineType))
+		executeTime = timeFormat(fields[3], "15:04:05", loc)
+		startTime   = timeFormat(fields[4], "2006-01-02 15:04:05", loc)
+		endTime     = timeFormat(fields[5], "2006-01-02 15:04:05", loc)
+	)
+
+	if err != nil {
+		return nil, err
+	}
+
+	if startTime.After(endTime) {
+		return nil, fmt.Errorf("startTime: %s is after endTime: %s", startTime.Format("2006-01-02 15:04:05"), endTime.Format("2006-01-02 15:04:05"))
+	}
+
+	return &RoutineSchedule{
+		ExecuteTime: executeTime,
+		Min:         startTime,
+		Max:         endTime,
+		Location:    loc,
+		Interval:    interval,
+		Spec:        spec,
+		RoutineType: RoutineType(routineType),
+	}, nil
+}
+
+func getIntRange(expr string, r bounds) (int, error) {
+	uintValue, err := mustParseInt(expr)
+	if err != nil {
+		return 0, err
+	}
+	if uintValue < r.min {
+		return 0, fmt.Errorf("uint value (%d) below minimum (%d)", uintValue, r.min)
+	}
+	if uintValue > r.max {
+		return 0, fmt.Errorf("uint value (%d) above maximum (%d)", uintValue, r.max)
+	}
+	return int(uintValue), nil
 }
