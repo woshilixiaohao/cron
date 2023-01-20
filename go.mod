@@ -1,5 +1,5 @@
-module github.com/woshilixiaohao/cron/v3
+module github.com/woshilixiaohao/cron
 
-go 1.12
+go 1.16
 
 require github.com/smartystreets/goconvey v1.7.2
